@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
@@ -9,162 +9,421 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Trash2, Plus, Upload, BookPlus } from "lucide-react";
+import {
+  BookPlus, X, Loader2, Trash2, Upload, Plus, ChevronDown, ChevronUp
+} from "lucide-react";
 
 export const Route = createFileRoute("/admin")({ component: AdminPage });
 
-async function uploadFile(file: File, path: string): Promise<string> {
-  const ext = file.name.split(".").pop();
-  const full = `${path}/${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabase.storage.from("manga").upload(full, file, { upsert: false });
+// ==================== UPLOAD FILE (FIXED) ====================
+async function uploadFile(file: File, folder: string): Promise<string> {
+  const ext = file.name.split(".").pop()?.toLowerCase() || "jpg"; // fallback
+  const fileName = `${folder}/${crypto.randomUUID()}.${ext || "jpg"}`;
+
+  const { error } = await supabase.storage
+    .from("manga")
+    .upload(fileName, file, {
+      cacheControl: "3600",
+      upsert: false,
+    });
+
   if (error) throw error;
-  return supabase.storage.from("manga").getPublicUrl(full).data.publicUrl;
+
+  const { data } = supabase.storage
+    .from("manga")
+    .getPublicUrl(fileName);
+
+  return data.publicUrl;
 }
 
+// ==================== ADMIN PAGE ====================
 function AdminPage() {
   const { user, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
+
   useEffect(() => {
-    if (!loading && (!user || !isAdmin)) navigate({ to: "/" });
+    if (!loading && (!user || !isAdmin)) {
+      navigate({ to: "/" });
+    }
   }, [loading, user, isAdmin, navigate]);
 
-  if (loading || !isAdmin) return (<><Header /><div className="p-8 text-center text-muted-foreground">Đang kiểm tra quyền...</div></>);
+  if (loading) {
+    return (
+      <>
+        <Header />
+        <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+          <Loader2 className="animate-spin mr-2" />
+          Đang kiểm tra quyền truy cập...
+        </div>
+      </>
+    );
+  }
+
+  if (!user || !isAdmin) return null;
 
   return (
     <>
       <Header />
-      <main className="container mx-auto px-4 py-6 space-y-8">
-        <h1 className="text-2xl font-bold">Quản trị</h1>
-        <NewMangaForm />
-        <MangaList />
-      </main>
+      <div className="min-h-screen bg-background py-8">
+        <div className="container mx-auto px-4 max-w-6xl">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold">Trang Quản Trị</h1>
+            <p className="text-muted-foreground">Quản lý truyện tranh</p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5">
+              <NewMangaForm />
+            </div>
+            <div className="lg:col-span-7">
+              <MangaList />
+            </div>
+          </div>
+        </div>
+      </div>
     </>
   );
 }
 
+// ==================== FORM ====================
 function NewMangaForm() {
   const qc = useQueryClient();
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [featured, setFeatured] = useState(false);
   const [cover, setCover] = useState<File | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Cleanup object URL khi unmount
+  useEffect(() => {
+    return () => {
+      if (coverPreview) URL.revokeObjectURL(coverPreview);
+    };
+  }, [coverPreview]);
+
+  const handleCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Revoke URL cũ nếu có
+    if (coverPreview) URL.revokeObjectURL(coverPreview);
+    setCover(file);
+    setCoverPreview(URL.createObjectURL(file));
+  };
+
+  const removeCover = () => {
+    if (coverPreview) URL.revokeObjectURL(coverPreview);
+    setCover(null);
+    setCoverPreview(null);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return toast.error("Nhập tiêu đề");
+    if (!title.trim()) {
+      toast.error("Tiêu đề không được để trống");
+      return;
+    }
     setLoading(true);
     try {
       let cover_url: string | null = null;
-      if (cover) cover_url = await uploadFile(cover, "covers");
-      const { error } = await supabase.from("mangas").insert({ title: title.trim(), description: description.trim() || null, cover_url, featured });
+      if (cover) {
+        cover_url = await uploadFile(cover, "covers");
+      }
+      const { error } = await supabase.from("mangas").insert({
+        title: title.trim(),
+        description: description.trim() || null,
+        cover_url,
+        featured,
+      });
       if (error) throw error;
-      toast.success("Đã thêm truyện!");
-      setTitle(""); setDescription(""); setCover(null); setFeatured(false);
-      qc.invalidateQueries();
-    } catch (err: any) { toast.error(err.message); }
-    setLoading(false);
+      toast.success("Thêm truyện thành công!");
+      setTitle("");
+      setDescription("");
+      setCover(null);
+      setFeatured(false);
+      if (coverPreview) URL.revokeObjectURL(coverPreview);
+      setCoverPreview(null);
+      qc.invalidateQueries({ queryKey: ["admin-mangas"] });
+    } catch (err: any) {
+      toast.error(err.message || "Có lỗi xảy ra");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <form onSubmit={submit} className="bg-card border border-border rounded-lg p-5 space-y-4">
-      <h2 className="font-semibold flex items-center gap-2"><BookPlus className="size-4" />Thêm truyện mới</h2>
-      <div><Label>Tiêu đề</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} required /></div>
-      <div><Label>Mô tả</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} /></div>
-      <div><Label>Ảnh bìa</Label><Input type="file" accept="image/*" onChange={(e) => setCover(e.target.files?.[0] ?? null)} /></div>
-      <div className="flex items-center gap-2"><Switch checked={featured} onCheckedChange={setFeatured} /><Label>Nổi bật</Label></div>
-      <Button type="submit" disabled={loading}><Plus className="size-4 mr-1" />{loading ? "Đang thêm..." : "Thêm truyện"}</Button>
-    </form>
-  );
-}
-
-function MangaList() {
-  const qc = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ["admin-mangas"],
-    queryFn: async () => (await supabase.from("mangas").select("*").order("created_at", { ascending: false })).data ?? [],
-  });
-
-  const del = async (id: string) => {
-    if (!confirm("Xoá truyện này?")) return;
-    const { error } = await supabase.from("mangas").delete().eq("id", id);
-    if (error) toast.error(error.message); else { toast.success("Đã xoá"); qc.invalidateQueries(); }
-  };
-
-  return (
-    <section>
-      <h2 className="font-semibold mb-3">Danh sách truyện</h2>
-      <div className="space-y-3">
-        {(data ?? []).map((m) => (
-          <div key={m.id} className="bg-card border border-border rounded-lg p-4">
-            <div className="flex items-start gap-4">
-              {m.cover_url && <img src={m.cover_url} alt="" className="w-16 h-24 object-cover rounded" />}
-              <div className="flex-1">
-                <h3 className="font-semibold">{m.title}{m.featured && <span className="ml-2 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Nổi bật</span>}</h3>
-                <p className="text-sm text-muted-foreground line-clamp-2">{m.description}</p>
-              </div>
-              <Button size="icon" variant="destructive" onClick={() => del(m.id)}><Trash2 className="size-4" /></Button>
-            </div>
-            <ChapterManager mangaId={m.id} />
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BookPlus className="size-5" />
+          Thêm Truyện Mới
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-5">
+          <div>
+            <Label>Tiêu đề *</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
-        ))}
-      </div>
-    </section>
+          <div>
+            <Label>Mô tả</Label>
+            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} />
+          </div>
+          <div>
+            <Label>Ảnh bìa</Label>
+            <Input type="file" accept="image/*" onChange={handleCoverChange} />
+            {coverPreview && (
+              <div className="mt-3 relative inline-block">
+                <img src={coverPreview} className="w-32 h-44 object-cover rounded-lg border" />
+                <Button type="button" variant="destructive" size="icon" className="absolute -top-2 -right-2" onClick={removeCover}>
+                  <X className="size-3" />
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <Switch checked={featured} onCheckedChange={setFeatured} />
+            <Label>Truyện nổi bật</Label>
+          </div>
+          <Button disabled={loading} className="w-full" size="lg">
+            {loading ? <Loader2 className="animate-spin mr-2" /> : null}
+            {loading ? "Đang xử lý..." : "Thêm Truyện"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
-function ChapterManager({ mangaId }: { mangaId: string }) {
-  const qc = useQueryClient();
-  const { data: chapters } = useQuery({
-    queryKey: ["admin-chapters", mangaId],
-    queryFn: async () => (await supabase.from("chapters").select("*").eq("manga_id", mangaId).order("chapter_number")).data ?? [],
+// ==================== MANGA LIST (React Query) ====================
+function MangaList() {
+  const { data: mangas = [], isLoading, refetch } = useQuery({
+    queryKey: ["admin-mangas"],
+    queryFn: async () => {
+      const { data } = await supabase.from("mangas").select("*").order("created_at", { ascending: false });
+      return data ?? [];
+    },
   });
-  const [num, setNum] = useState("");
-  const [title, setTitle] = useState("");
-  const [files, setFiles] = useState<FileList | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  const add = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!num || !files || files.length === 0) return toast.error("Nhập số chương và chọn trang");
-    setLoading(true);
-    try {
-      const urls: string[] = [];
-      for (const f of Array.from(files)) urls.push(await uploadFile(f, `pages/${mangaId}`));
-      const { error } = await supabase.from("chapters").insert({ manga_id: mangaId, chapter_number: parseInt(num, 10), title: title.trim() || null, pages: urls });
-      if (error) throw error;
-      toast.success("Đã thêm chương!");
-      setNum(""); setTitle(""); setFiles(null);
-      qc.invalidateQueries({ queryKey: ["admin-chapters", mangaId] });
-    } catch (err: any) { toast.error(err.message); }
-    setLoading(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const deleteManga = async (id: string, title: string) => {
+    if (!confirm(`Xóa "${title}" và tất cả chương?`)) return;
+    await supabase.from("mangas").delete().eq("id", id);
+    toast.success("Đã xóa truyện");
+    refetch();
   };
 
-  const delCh = async (id: string) => {
-    if (!confirm("Xoá chương?")) return;
-    await supabase.from("chapters").delete().eq("id", id);
-    qc.invalidateQueries({ queryKey: ["admin-chapters", mangaId] });
-  };
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="py-12 flex justify-center">
+          <Loader2 className="animate-spin" />
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <div className="mt-3 pl-4 border-l-2 border-border space-y-2">
-      <form onSubmit={add} className="grid sm:grid-cols-[100px_1fr_auto_auto] gap-2 items-end">
-        <div><Label className="text-xs">Số chương</Label><Input type="number" min={1} value={num} onChange={(e) => setNum(e.target.value)} /></div>
-        <div><Label className="text-xs">Tiêu đề (tuỳ chọn)</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-        <div><Label className="text-xs">Các trang</Label><Input type="file" accept="image/*" multiple onChange={(e) => setFiles(e.target.files)} /></div>
-        <Button type="submit" size="sm" disabled={loading}><Upload className="size-4 mr-1" />{loading ? "..." : "Thêm"}</Button>
-      </form>
-      {(chapters ?? []).length > 0 && (
-        <ul className="text-sm space-y-1">
-          {chapters!.map((c) => (
-            <li key={c.id} className="flex items-center justify-between py-1">
-              <span>Ch.{c.chapter_number} • {c.pages.length} trang • {c.views} lượt xem</span>
-              <Button size="icon" variant="ghost" onClick={() => delCh(c.id)}><Trash2 className="size-3" /></Button>
-            </li>
-          ))}
-        </ul>
+    <Card>
+      <CardHeader>
+        <CardTitle>Danh sách truyện ({mangas.length})</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {mangas.length === 0 ? (
+          <p className="text-muted-foreground text-center py-6">Chưa có truyện nào.</p>
+        ) : (
+          mangas.map((manga) => (
+            <div key={manga.id} className="border rounded-lg">
+              <div className="flex items-center gap-4 p-4">
+                <img src={manga.cover_url} className="w-12 h-16 object-cover rounded" />
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold truncate">{manga.title}</h3>
+                  <p className="text-xs text-muted-foreground">{manga.description}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setExpandedId(expandedId === manga.id ? null : manga.id)}
+                >
+                  {expandedId === manga.id ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => deleteManga(manga.id, manga.title)}>
+                  <Trash2 className="size-4 text-destructive" />
+                </Button>
+              </div>
+              {expandedId === manga.id && (
+                <div className="border-t p-4 bg-muted/50">
+                  <ChapterManager mangaId={manga.id} />
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ==================== CHAPTER MANAGER (cải tiến) ====================
+function ChapterManager({ mangaId }: { mangaId: string }) {
+  const [chapters, setChapters] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [chapterNum, setChapterNum] = useState("");
+  const [chapterTitle, setChapterTitle] = useState("");
+  const [uploadingChapterId, setUploadingChapterId] = useState<string | null>(null);
+
+  const fetchChapters = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data } = await supabase
+        .from("chapters")
+        .select("*")
+        .eq("manga_id", mangaId)
+        .order("chapter_number");
+      setChapters(data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [mangaId]);
+
+  useEffect(() => {
+    fetchChapters();
+  }, [fetchChapters]);
+
+  const addChapter = async () => {
+    if (!chapterNum) return;
+    const num = parseInt(chapterNum);
+    if (isNaN(num)) return;
+
+    // Optimistic UI
+    const tempId = crypto.randomUUID();
+    setChapters((prev) => [
+      ...prev,
+      { id: tempId, chapter_number: num, title: chapterTitle, pages: [] },
+    ]);
+
+    const { error } = await supabase.from("chapters").insert({
+      manga_id: mangaId,
+      chapter_number: num,
+      title: chapterTitle,
+      pages: [],
+    });
+    if (error) {
+      toast.error(error.message);
+      setChapters((prev) => prev.filter((ch) => ch.id !== tempId)); // rollback
+    } else {
+      toast.success("Thêm chương thành công");
+      setChapterNum("");
+      setChapterTitle("");
+      setShowAdd(false);
+      fetchChapters(); // lấy dữ liệu thật từ server
+    }
+  };
+
+  const deleteChapter = async (id: string, num: number) => {
+    if (!confirm(`Xóa Chương ${num}?`)) return;
+    await supabase.from("chapters").delete().eq("id", id);
+    toast.success("Đã xóa chương");
+    fetchChapters();
+  };
+
+  const uploadPages = async (chapterId: string, files: FileList) => {
+    setUploadingChapterId(chapterId);
+    try {
+      // Upload song song tất cả file
+      const urls = await Promise.all(
+        Array.from(files).map((file) =>
+          uploadFile(file, `chapters/${chapterId}`)
+        )
+      );
+      // Lấy danh sách pages hiện tại và cập nhật
+      const { data: currentChapter } = await supabase
+        .from("chapters")
+        .select("pages")
+        .eq("id", chapterId)
+        .single();
+      const existingPages = currentChapter?.pages || [];
+      const { error } = await supabase
+        .from("chapters")
+        .update({ pages: [...existingPages, ...urls] })
+        .eq("id", chapterId);
+      if (error) throw error;
+      toast.success(`Đã thêm ${files.length} trang`);
+      fetchChapters();
+    } catch (err: any) {
+      toast.error(err.message || "Lỗi upload trang");
+    } finally {
+      setUploadingChapterId(null);
+    }
+  };
+
+  if (loading) return <Loader2 className="animate-spin mx-auto my-4" />;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold">Chương ({chapters.length})</h4>
+        <Button size="sm" variant="outline" onClick={() => setShowAdd(!showAdd)}>
+          <Plus className="size-3 mr-1" />
+          Thêm Chương
+        </Button>
+      </div>
+
+      {showAdd && (
+        <div className="flex gap-2 items-end">
+          <div>
+            <Label className="text-xs">Số</Label>
+            <Input type="number" value={chapterNum} onChange={(e) => setChapterNum(e.target.value)} className="h-8 w-20" />
+          </div>
+          <div className="flex-1">
+            <Label className="text-xs">Tiêu đề</Label>
+            <Input value={chapterTitle} onChange={(e) => setChapterTitle(e.target.value)} className="h-8" />
+          </div>
+          <Button size="sm" onClick={addChapter}>Lưu</Button>
+        </div>
       )}
+
+      {chapters.map((ch) => (
+        <div key={ch.id} className="flex items-center gap-3 bg-background p-3 rounded-lg border">
+          <span className="text-sm font-medium w-16">Ch. {ch.chapter_number}</span>
+          <span className="text-sm flex-1 truncate">{ch.title || "Không tiêu đề"}</span>
+          <span className="text-xs text-muted-foreground">{ch.pages?.length || 0} trang</span>
+          <div className="flex items-center gap-1">
+            <label className="cursor-pointer">
+              <div className="flex items-center gap-1 text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 transition-colors">
+                <Upload className="size-3" />
+                {uploadingChapterId === ch.id ? (
+                  <Loader2 className="animate-spin size-3" />
+                ) : (
+                  "Upload"
+                )}
+              </div>
+              <input
+                type="file"
+                className="hidden"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    uploadPages(ch.id, e.target.files);
+                    e.target.value = "";
+                  }
+                }}
+              />
+            </label>
+            <Button variant="ghost" size="icon" onClick={() => deleteChapter(ch.id, ch.chapter_number)}>
+              <Trash2 className="size-3 text-destructive" />
+            </Button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
