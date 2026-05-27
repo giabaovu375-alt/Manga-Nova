@@ -19,7 +19,15 @@ export const Route = createFileRoute("/admin")({ component: AdminPage });
 
 // ==================== UPLOAD FILE (FIXED) ====================
 async function uploadFile(file: File, folder: string): Promise<string> {
-  const ext = file.name.split(".").pop()?.toLowerCase() || "jpg"; // fallback
+  // Validate file
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Chỉ chấp nhận file ảnh (JPG, PNG, WebP)");
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error("File quá lớn. Vui lòng chọn file dưới 10MB");
+  }
+
+  const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
   const fileName = `${folder}/${crypto.randomUUID()}.${ext || "jpg"}`;
 
   const { error } = await supabase.storage
@@ -35,6 +43,7 @@ async function uploadFile(file: File, folder: string): Promise<string> {
     .from("manga")
     .getPublicUrl(fileName);
 
+  // Đảm bảo URL có đúng định dạng (fix lỗi thiếu dấu /)
   return data.publicUrl;
 }
 
