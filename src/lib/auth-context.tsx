@@ -23,14 +23,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s);
       if (s?.user) {
-        setTimeout(async () => {
-          const { data } = await supabase.from("user_roles").select("role").eq("user_id", s.user.id);
+        setLoading(true);
+        supabase.from("user_roles").select("role").eq("user_id", s.user.id).then(({ data }) => {
           setIsAdmin(!!data?.some(r => r.role === "admin"));
-        }, 0);
+          setLoading(false);
+        });
       } else {
         setIsAdmin(false);
+        setLoading(false);
       }
     });
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       if (session?.user) {
@@ -39,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setLoading(false);
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
