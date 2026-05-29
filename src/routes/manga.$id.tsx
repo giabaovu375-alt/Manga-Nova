@@ -1,10 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useChildMatches } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Header } from "@/components/Header";
-import { Star, Eye, BookOpen, ImageOff, ChevronRight, Clock, Hash } from "lucide-react";
+import { Star, Eye, BookOpen, ImageOff, ChevronRight, Hash } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useState } from "react";
 
@@ -15,6 +14,12 @@ function MangaDetail() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [hoverStar, setHoverStar] = useState(0);
+  const childMatches = useChildMatches();
+
+  // Nếu đang ở trang chapter (child route) thì chỉ render Outlet
+  if (childMatches.length > 0) {
+    return <Outlet />;
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ["manga", id],
@@ -494,4 +499,4 @@ function MangaDetail() {
       </div>
     </>
   );
-}       
+}
