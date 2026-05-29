@@ -16,11 +16,6 @@ function MangaDetail() {
   const [hoverStar, setHoverStar] = useState(0);
   const childMatches = useChildMatches();
 
-  // Nếu đang ở trang chapter (child route) thì chỉ render Outlet
-  if (childMatches.length > 0) {
-    return <Outlet />;
-  }
-
   const { data, isLoading } = useQuery({
     queryKey: ["manga", id],
     queryFn: async () => {
@@ -54,6 +49,11 @@ function MangaDetail() {
       qc.invalidateQueries({ queryKey: ["manga", id] });
     }
   };
+
+  // Nếu đang ở trang chapter (child route) thì chỉ render Outlet
+  if (childMatches.length > 0) {
+    return <Outlet />;
+  }
 
   if (isLoading)
     return (
